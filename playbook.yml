@@ -1,0 +1,74 @@
+---
+- name: Backup Jump Server Directory
+  hosts: jump_server
+  become: true
+  vars:
+    backup_src_dir: "/opt/jumpserver-installer-v4.0.2/"
+    backup_dest_dir: "/var/backup/jumpserver-backup"
+    backup_filename: "jumpserver-{{ ansible_date_time.date }}.tar.gz"
+    backup_server_ip: "172.29.64.12"  # IP of the backup server
+
+  tasks:
+    - name: Ensure local backup directory exists
+      file:
+        path: "{{ backup_dest_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Create compressed backup archive locally
+      archive:
+        path: "{{ backup_src_dir }}"
+        dest: "{{ backup_dest_dir }}/{{ backup_filename }}"
+        format: gz
+      tags: backup
+
+    - name: Verify local backup file creation
+      stat:
+        path: "{{ backup_dest_dir }}/{{ backup_filename }}"
+      register: backup_file
+
+    - name: Display backup file status
+      debug:
+        var: backup_file
+
+    - name: Ensure remote backup directory exists on backup server
+      delegate_to: "{{ backup_server_ip }}"
+      file:
+        path: "/var/backup/jumpserver-backup"
+        state: directory
+        mode: '0755'
+
+    - name: Transfer backup to backup server
+      copy:
+        src: "{{ backup_dest_dir }}/{{ backup_filename }}"
+        dest: "/var/backup/jumpserver-backup/{{ backup_filename }}"
+      delegate_to: "{{ backup_server_ip }}"
+
+    - name: Remove local backups older than 3 days
+      find:
+        path: "{{ backup_dest_dir }}"
+        age: "3d"
+        recurse: yes
+      register: old_local_backups
+
+    - name: Delete old local backups
+      file:
+        path: "{{ item.path }}"
+        state: absent
+      loop: "{{ old_local_backups.files }}"
+
+    - name: Remove remote backups older than 7 days
+      delegate_to: "{{ backup_server_ip }}"
+      find:
+        path: "/var/backup/jumpserver-backup"
+        age: "7d"
+        recurse: yes
+      register: old_remote_backups
+
+    - name: Delete old remote backups
+      delegate_to: "{{ backup_server_ip }}"
+      file:
+        path: "{{ item.path }}"
+        state: absent
+      loop: "{{ old_remote_backups.files }}"
+
